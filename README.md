@@ -1,42 +1,27 @@
-# 📊 SQL Server Inventory Script
+# SQL Server Inventory Script
 
-> A whimsical yet powerful PowerShell script to extract detailed configuration and resource information from SQL Server 2017 instances on Windows Server 2016/2019.
-
----
-
-## 🧙‍♂️ Features
-
-✨ This magical inventory script:
-
-* 🔍 Gathers OS & hardware specs
-* 💾 Captures disk configuration and memory stats
-* 🛠 Extracts SQL Server core settings
-* 🗄️ Enumerates databases with sizes and recovery models
-* ⏰ Lists SQL Agent jobs and schedules
-* 🧑‍🚀 Details logins and linked servers
-* 🌐 Outputs in JSON (with support for deeply nested data) or CSV
+A PowerShell script that gathers configuration and resource information from SQL Server 2017 instances running on Windows Server 2016 or 2019.
 
 ---
 
-## 🎮 Pixel Art Moment
+## Features
 
-```
-        .----.
-     _.'__    `.
- .--(#)(##)---/#\
-' @          /###\
-`--..__..-''\###/
-           \#/   [SQL Inventory Wizard]
-```
+* Gather operating system and hardware details
+* Capture disk configuration and memory statistics
+* Extract SQL Server settings
+* Enumerate databases with sizes and recovery models
+* List SQL Agent jobs and schedules
+* Record logins and linked servers
+* Output results in JSON (supports deep nesting) or CSV
 
 ---
 
-## 🚀 Requirements
+## Requirements
 
-* PowerShell 5.1+
-* SqlServer PowerShell module
+* PowerShell 5.1 or later
+* `SqlServer` PowerShell module
 
-Install the SqlServer module (if not installed):
+Install the module if it is not already present:
 
 ```powershell
 Install-Module SqlServer -Scope CurrentUser -Force
@@ -44,7 +29,7 @@ Install-Module SqlServer -Scope CurrentUser -Force
 
 ---
 
-## 🧪 Example Usage
+## Example Usage
 
 ```powershell
 ./new_info_grab.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
@@ -52,42 +37,42 @@ Install-Module SqlServer -Scope CurrentUser -Force
 
 ---
 
-## 🔐 Encryption & Trust
+## Encryption
 
-This script uses encrypted connections with:
+The script connects using the following parameters:
 
 ```powershell
 Encrypt=True; TrustServerCertificate=True
 ```
 
-ensuring SQL Server 2017 and older TLS configurations are fully supported.
+These settings ensure compatibility with SQL Server 2017 and older TLS configurations.
 
 ---
 
-## 🧠 Output Format Options
+## Output Format Options
 
-* `Json` (default): Outputs deeply structured JSON (up to 20 levels deep)
-* `Csv`: Tabular summary of server-level metadata
-* `None`: Just view results in the console
+* `Json` (default) – structured JSON output (up to 20 levels deep)
+* `Csv` – tabular summary of server metadata
+* `None` – view results in the console only
 
 ---
 
-## 🧵 Structure of Output
+## Output Structure
 
-Each server object contains:
+Each server object includes:
 
-* OS info
-* CPU/Memory stats
-* Disk array
-* SQL version, edition, service accounts
+* OS information
+* CPU and memory statistics
+* Disk array details
+* SQL version, edition, and service accounts
 * Database inventory
-* Agent Jobs
+* Agent jobs
 * Logins
-* Linked Servers
+* Linked servers
 
 ---
 
-## 🧼 File Output Examples
+## File Output Examples
 
 * `SQLInventory_20250602_105304.json`
 * `SQLInventory_20250602_105304.csv`
@@ -95,32 +80,18 @@ Each server object contains:
 
 ---
 
-## 🧙‍♀️ Contributor
+## Contributor
 
-Crafted with ✨ by **[tsvb](https://github.com/tsvb)**
-
----
-
-## 🐛 Issues
-
-If you encounter a bug or have a suggestion, [open an issue](https://github.com/tsvb/SQL_Info/issues).
+Created by **[tsvb](https://github.com/tsvb)**
 
 ---
 
-## ⚖️ License
+## Issues
 
-MIT License. Use it, fork it, customize it. Just don’t sell it to goblins 🐲.
+If you encounter a bug or have a suggestion, please [open an issue](https://github.com/tsvb/SQL_Info/issues).
 
 ---
 
-## 🖼 Bonus Pixel Art
+## License
 
-```
-  .-.
- (o o)
- | O \
-  \   \     SQL
-   `~~~'   Inventory
-```
-
-Stay whimsical. Audit responsibly. 🪄
+This project is released under the MIT License.
