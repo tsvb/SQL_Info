@@ -47,7 +47,7 @@ Install-Module SqlServer -Scope CurrentUser -Force
 ## 🧪 Example Usage
 
 ```powershell
-./Get-SQLServerInventory.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
+./new_info_grab.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
 ```
 
 ---

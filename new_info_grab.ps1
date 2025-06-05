@@ -15,7 +15,7 @@
     'Json' (default) | 'Csv' | 'None'. Determines final export format.
 
 .EXAMPLE
-    .\Get-SQLServerInventory.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
+    .\new_info_grab.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
 
 .NOTES
     Compatible with SQL Server 2017 and Windows Server 2016/2019.
