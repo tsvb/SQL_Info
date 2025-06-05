@@ -259,6 +259,21 @@ if ($OutputFormat -eq 'Json') {
         Write-Warning "Newtonsoft JSON serialization failed: $_"
     }
 }
+elseif ($OutputFormat -eq 'Csv') {
+    try {
+        $csvPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+        $AllServerData |
+            Select-Object ScannedServerInput, FQDN, OperatingSystem, OSVersion, OSArchitecture,
+                          TotalMemoryGB, ProcessorCount, LogicalProcessors,
+                          SQLServerName, SQLInstanceName, SQLEdition, SQLVersion,
+                          SQLProductLevel, SQLProductUpdateLevel, SQLCollation,
+                          SQLAuthMode, SQLMaxMemoryMB, SQLMinMemoryMB,
+                          SQLServiceAccount, SQLAgentServiceAccount |
+            Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+        Write-Host "✅ CSV export completed at $csvPath"
+    } catch {
+        Write-Warning "CSV export failed: $_"
+    }
+}
 
-
-$AllServerData
+Write-Output $AllServerData
