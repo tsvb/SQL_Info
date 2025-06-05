@@ -240,7 +240,12 @@ if ($OutputFormat -eq 'Json') {
             if ($jsonDll) {
                 Add-Type -Path $jsonDll.FullName
             } else {
-                Write-Warning "Newtonsoft.Json.dll not found. JSON output may be truncated."
+                Write-Warning "Newtonsoft.Json.dll not found. Falling back to ConvertTo-Json."
+                $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
+                $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+                $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
+                Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
+                return
             }
         }
 
@@ -254,9 +259,18 @@ if ($OutputFormat -eq 'Json') {
             $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
             $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
             Write-Host "✅ JSON export completed using Newtonsoft at $jsonPath"
+        } else {
+            $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
+            $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+            $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
+            Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
         }
     } catch {
         Write-Warning "Newtonsoft JSON serialization failed: $_"
+        $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
+        $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+        $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
+        Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
     }
 }
 elseif ($OutputFormat -eq 'Csv') {
