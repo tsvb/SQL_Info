@@ -1,6 +1,6 @@
 # SQL Server Inventory Script
 
-A PowerShell script that gathers configuration and resource information from SQL Server 2017 instances running on Windows Server 2016 or 2019.
+A PowerShell script that gathers configuration and resource information from SQL Server instances on any supported version of Windows.
 
 ---
 
@@ -45,7 +45,7 @@ The script connects using the following parameters:
 Encrypt=True; TrustServerCertificate=True
 ```
 
-These settings ensure compatibility with SQL Server 2017 and older TLS configurations.
+These settings ensure compatibility across SQL Server versions and TLS configurations.
 
 ---
 
