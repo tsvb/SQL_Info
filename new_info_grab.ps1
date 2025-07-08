@@ -18,7 +18,7 @@
     .\new_info_grab.ps1 -TargetServers "SQLSRV01","SQLSRV02\SQLEXPRESS" -OutputFormat Json
 
 .NOTES
-    Compatible with SQL Server 2017 and Windows Server 2016/2019.
+    Designed to run against any supported version of Windows and SQL Server.
 #>
 
 [CmdletBinding()]
@@ -35,6 +35,24 @@ Import-Module SqlServer -ErrorAction SilentlyContinue
 if (-not (Get-Module SqlServer)) {
     Write-Warning "SqlServer module not loaded. Install with 'Install-Module SqlServer'."
     return
+}
+
+function Get-CimOrWmiInstance {
+    param(
+        [string]$ClassName,
+        [string]$ComputerName,
+        [string]$Filter = $null
+    )
+
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        $params = @{ClassName = $ClassName; ComputerName = $ComputerName; ErrorAction = 'Stop'}
+        if ($Filter) { $params.Filter = $Filter }
+        return Get-CimInstance @params
+    } else {
+        $params = @{Class = $ClassName; ComputerName = $ComputerName; ErrorAction = 'Stop'}
+        if ($Filter) { $params.Filter = $Filter }
+        return Get-WmiObject @params
+    }
 }
 
 function Invoke-SqlQuery {
@@ -97,19 +115,30 @@ foreach ($sv in $TargetServers) {
     try {
         try {
             $fqdna = Resolve-DnsName -Name $hostOnly -ErrorAction SilentlyContinue
-            $obj.FQDN = if ($fqdna) { $fqdna.NameHost } else { $hostOnly }
+            if (-not $fqdna) {
+                try { $fqdna = [System.Net.Dns]::GetHostEntry($hostOnly) } catch {}
+            }
+            if ($fqdna) {
+                if ($fqdna.PSObject.Properties.Name -contains 'NameHost') {
+                    $obj.FQDN = $fqdna.NameHost
+                } else {
+                    $obj.FQDN = $fqdna.HostName
+                }
+            } else {
+                $obj.FQDN = $hostOnly
+            }
 
-            $os = Get-CimInstance Win32_OperatingSystem -ComputerName $hostOnly -ErrorAction Stop
+            $os = Get-CimOrWmiInstance -ClassName Win32_OperatingSystem -ComputerName $hostOnly
             $obj.OperatingSystem   = $os.Caption
             $obj.OSVersion         = $os.Version
             $obj.OSArchitecture    = $os.OSArchitecture
             $obj.TotalMemoryGB     = [math]::Round($os.TotalVisibleMemorySize/1MB,2)
 
-            $cs = Get-CimInstance Win32_ComputerSystem -ComputerName $hostOnly -ErrorAction Stop
+            $cs = Get-CimOrWmiInstance -ClassName Win32_ComputerSystem -ComputerName $hostOnly
             $obj.ProcessorCount    = $cs.NumberOfProcessors
             $obj.LogicalProcessors = $cs.NumberOfLogicalProcessors
 
-            $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -ComputerName $hostOnly -ErrorAction Stop
+            $disks = Get-CimOrWmiInstance -ClassName Win32_LogicalDisk -ComputerName $hostOnly -Filter "DriveType=3"
             $obj.Disks = $disks | ForEach-Object {
                 [PSCustomObject]@{
                     DriveLetter = $_.DeviceID
