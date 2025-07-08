@@ -270,6 +270,43 @@ foreach ($sv in $TargetServers) {
             $obj.ProcessorCount    = $osInfo.ProcessorCount
             $obj.LogicalProcessors = $osInfo.LogicalProcessors
             $obj.Disks             = $osInfo.Disks
+=======
+        try {
+            $fqdna = Resolve-DnsName -Name $hostOnly -ErrorAction SilentlyContinue
+            if (-not $fqdna) {
+                try { $fqdna = [System.Net.Dns]::GetHostEntry($hostOnly) } catch {}
+            }
+            if ($fqdna) {
+                if ($fqdna.PSObject.Properties.Name -contains 'NameHost') {
+                    $obj.FQDN = $fqdna.NameHost
+                } else {
+                    $obj.FQDN = $fqdna.HostName
+                }
+            } else {
+                $obj.FQDN = $hostOnly
+            }
+
+            $os = Get-CimOrWmiInstance -ClassName Win32_OperatingSystem -ComputerName $hostOnly
+            $obj.OperatingSystem   = $os.Caption
+            $obj.OSVersion         = $os.Version
+            $obj.OSArchitecture    = $os.OSArchitecture
+            $obj.TotalMemoryGB     = [math]::Round($os.TotalVisibleMemorySize/1MB,2)
+
+            $cs = Get-CimOrWmiInstance -ClassName Win32_ComputerSystem -ComputerName $hostOnly
+            $obj.ProcessorCount    = $cs.NumberOfProcessors
+            $obj.LogicalProcessors = $cs.NumberOfLogicalProcessors
+
+            $disks = Get-CimOrWmiInstance -ClassName Win32_LogicalDisk -ComputerName $hostOnly -Filter "DriveType=3"
+            $obj.Disks = $disks | ForEach-Object {
+                [PSCustomObject]@{
+                    DriveLetter = $_.DeviceID
+                    FileSystem  = $_.FileSystem
+                    SizeGB      = [math]::Round($_.Size/1GB,2)
+                    FreeSpaceGB = [math]::Round($_.FreeSpace/1GB,2)
+                }
+            }
+        } catch {
+            Write-Warning "OS/hardware error on $($sv): $($_)"
         }
 
         $core = Get-SqlCoreInfo -Server $sv

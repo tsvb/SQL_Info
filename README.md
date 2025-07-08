@@ -1,6 +1,8 @@
 # SQL Server Inventory Script
 
+
 A PowerShell script that gathers configuration and resource information from SQL Server instances on any supported version of Windows or SQL Server.
+
 
 ---
 
