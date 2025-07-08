@@ -215,6 +215,186 @@ WHERE is_linked = 1;
     }
 }
 
+# Database file details
+function Get-DatabaseFileInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT DB_NAME(database_id) AS DatabaseName,
+       name AS LogicalName,
+       physical_name AS FilePath,
+       type_desc,
+       size / 128.0 AS SizeMB,
+       growth,
+       is_percent_growth,
+       max_size
+FROM sys.master_files;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Database file query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Availability group information
+function Get-AvailabilityGroups {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT ag.name AS AGName,
+       ar.replica_server_name AS ReplicaName,
+       ars.role_desc,
+       ar.availability_mode_desc,
+       ars.synchronization_state_desc
+FROM sys.availability_groups ag
+JOIN sys.availability_replicas ar ON ag.group_id = ar.group_id
+LEFT JOIN sys.dm_hadr_availability_replica_states ars
+       ON ar.replica_id = ars.replica_id;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "AG query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Core configuration values
+function Get-SqlConfiguration {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT name, value_in_use
+FROM sys.configurations
+WHERE name IN ('max degree of parallelism','cost threshold for parallelism');
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Configuration query failed on $Server: $_"
+        return $null
+    }
+}
+
+# TempDB file configuration
+function Get-TempDBInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT name,
+       physical_name,
+       size/128.0 AS SizeMB,
+       growth,
+       is_percent_growth
+FROM sys.master_files
+WHERE database_id = 2;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "TempDB query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Backup history (last 30 days)
+function Get-BackupHistory {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT database_name,
+       MAX(CASE WHEN type='D' THEN backup_finish_date END) AS LastFullBackup,
+       MAX(CASE WHEN type='L' THEN backup_finish_date END) AS LastLogBackup
+FROM msdb.dbo.backupset
+WHERE backup_finish_date > DATEADD(day,-30,GETDATE())
+GROUP BY database_name;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query -Database 'msdb'
+    } catch {
+        Write-Warning "Backup history query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Server role membership
+function Get-ServerRoles {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT sp.name AS LoginName,
+       sr.name AS RoleName
+FROM sys.server_role_members rm
+JOIN sys.server_principals sp ON rm.member_principal_id = sp.principal_id
+JOIN sys.server_principals sr ON rm.role_principal_id = sr.principal_id;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Server role query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Wait statistics
+function Get-WaitStats {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT TOP 20 wait_type, waiting_tasks_count, wait_time_ms
+FROM sys.dm_os_wait_stats
+ORDER BY wait_time_ms DESC;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Wait stats query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Network info (port)
+function Get-SqlNetworkInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT local_net_address, local_tcp_port
+FROM sys.dm_exec_connections
+WHERE session_id = @@SPID;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Network info query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Basic replication configuration
+function Get-ReplicationInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT name,
+       is_published,
+       is_subscribed,
+       is_distributor
+FROM sys.databases
+WHERE is_published = 1 OR is_subscribed = 1 OR is_distributor = 1;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Replication query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Retrieve SPNs for a service account
+function Get-SPNInfo {
+    param([string]$Account)
+    try {
+        $spns = setspn -L $Account 2>$null
+        return $spns
+    } catch {
+        Write-Warning "SPN query failed for $Account: $_"
+        return $null
+    }
+}
+
 $AllServerData = @()
 
 Start-SafeTranscript
@@ -250,10 +430,16 @@ foreach ($sv in $TargetServers) {
         SQLMinMemoryMB         = 0
         SQLServiceAccount      = ''
         SQLAgentServiceAccount = ''
-        FileLocations          = @()
         SQLConfig              = @()
+        TempDBInfo             = @()
         AvailabilityGroups     = @()
-        IOStats                = @()
+        ReplicationInfo        = @()
+        NetworkInfo            = @()
+        SPNInfo                = @()
+        BackupHistory          = @()
+        ServerRoles            = @()
+        WaitStats              = @()
+        DatabaseFiles          = @()
         Databases              = @()
         AgentJobs              = @()
         Logins                 = @()
@@ -270,43 +456,6 @@ foreach ($sv in $TargetServers) {
             $obj.ProcessorCount    = $osInfo.ProcessorCount
             $obj.LogicalProcessors = $osInfo.LogicalProcessors
             $obj.Disks             = $osInfo.Disks
-=======
-        try {
-            $fqdna = Resolve-DnsName -Name $hostOnly -ErrorAction SilentlyContinue
-            if (-not $fqdna) {
-                try { $fqdna = [System.Net.Dns]::GetHostEntry($hostOnly) } catch {}
-            }
-            if ($fqdna) {
-                if ($fqdna.PSObject.Properties.Name -contains 'NameHost') {
-                    $obj.FQDN = $fqdna.NameHost
-                } else {
-                    $obj.FQDN = $fqdna.HostName
-                }
-            } else {
-                $obj.FQDN = $hostOnly
-            }
-
-            $os = Get-CimOrWmiInstance -ClassName Win32_OperatingSystem -ComputerName $hostOnly
-            $obj.OperatingSystem   = $os.Caption
-            $obj.OSVersion         = $os.Version
-            $obj.OSArchitecture    = $os.OSArchitecture
-            $obj.TotalMemoryGB     = [math]::Round($os.TotalVisibleMemorySize/1MB,2)
-
-            $cs = Get-CimOrWmiInstance -ClassName Win32_ComputerSystem -ComputerName $hostOnly
-            $obj.ProcessorCount    = $cs.NumberOfProcessors
-            $obj.LogicalProcessors = $cs.NumberOfLogicalProcessors
-
-            $disks = Get-CimOrWmiInstance -ClassName Win32_LogicalDisk -ComputerName $hostOnly -Filter "DriveType=3"
-            $obj.Disks = $disks | ForEach-Object {
-                [PSCustomObject]@{
-                    DriveLetter = $_.DeviceID
-                    FileSystem  = $_.FileSystem
-                    SizeGB      = [math]::Round($_.Size/1GB,2)
-                    FreeSpaceGB = [math]::Round($_.FreeSpace/1GB,2)
-                }
-            }
-        } catch {
-            Write-Warning "OS/hardware error on $($sv): $($_)"
         }
 
         $core = Get-SqlCoreInfo -Server $sv
@@ -323,7 +472,35 @@ foreach ($sv in $TargetServers) {
             $obj.SQLMinMemoryMB        = $core.SQLMinMemoryMB
             $obj.SQLServiceAccount     = $core.SQLServiceAccount
             $obj.SQLAgentServiceAccount = $core.SQLAgentServiceAccount
+            $spns = Get-SPNInfo -Account $core.SQLServiceAccount
+            if ($spns) { $obj.SPNInfo = $spns }
         }
+
+        $obj.NetworkInfo = Get-SqlNetworkInfo -Server $sv
+
+        $cfg = Get-SqlConfiguration -Server $sv
+        if ($cfg) { $obj.SQLConfig = $cfg | Select-Object * }
+
+        $temp = Get-TempDBInfo -Server $sv
+        if ($temp) { $obj.TempDBInfo = $temp | Select-Object * }
+
+        $files = Get-DatabaseFileInfo -Server $sv
+        if ($files) { $obj.DatabaseFiles = $files | Select-Object * }
+
+        $ags = Get-AvailabilityGroups -Server $sv
+        if ($ags) { $obj.AvailabilityGroups = $ags | Select-Object * }
+
+        $rep = Get-ReplicationInfo -Server $sv
+        if ($rep) { $obj.ReplicationInfo = $rep | Select-Object * }
+
+        $back = Get-BackupHistory -Server $sv
+        if ($back) { $obj.BackupHistory = $back | Select-Object * }
+
+        $roles = Get-ServerRoles -Server $sv
+        if ($roles) { $obj.ServerRoles = $roles | Select-Object * }
+
+        $waits = Get-WaitStats -Server $sv
+        if ($waits) { $obj.WaitStats = $waits | Select-Object * }
 
         $dbs = Get-DatabaseInfo -Server $sv
         if ($dbs) {
