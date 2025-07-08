@@ -10,10 +10,15 @@ A PowerShell script that gathers configuration and resource information from SQL
 
 * Gather operating system and hardware details
 * Capture disk configuration and memory statistics
-* Extract SQL Server settings
+* Extract SQL Server settings and core configuration (MAXDOP, CTFP)
 * Enumerate databases with sizes and recovery models
+* Capture database file locations and TempDB configuration
 * List SQL Agent jobs and schedules
-* Record logins and linked servers
+* Record logins, server roles, and linked servers
+* Gather availability group and replication details
+* Record recent backup history
+* Collect network port and SPN information
+* Capture wait statistics for baseline analysis
 * Output results in JSON (supports deep nesting) or CSV
 
 ---
@@ -67,10 +72,16 @@ Each server object includes:
 * CPU and memory statistics
 * Disk array details
 * SQL version, edition, and service accounts
-* Database inventory
+* SQL configuration values
+* Network port and SPN info
+* Database inventory and file locations
+* TempDB configuration
+* Availability groups and replication status
+* Backup history
+* Server roles and logins
 * Agent jobs
-* Logins
 * Linked servers
+* Wait statistics
 
 ---
 
