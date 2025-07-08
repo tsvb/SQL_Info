@@ -66,10 +66,158 @@ function Invoke-SqlQuery {
     return Invoke-Sqlcmd -ConnectionString $connStr -Query $Query -ErrorAction Stop
 }
 
+# Start transcript safely
+function Start-SafeTranscript {
+    $logPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    try {
+        Start-Transcript -Path $logPath -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to start transcript: $_"
+    }
+}
+
+# DNS resolution with fallback
+function Resolve-FQDN {
+    param([string]$HostName)
+    try {
+        $entry = Resolve-DnsName -Name $HostName -ErrorAction Stop
+        return ($entry | Where-Object { $_.Type -eq 'A' }).NameHost
+    } catch {
+        try {
+            $entry = [System.Net.Dns]::GetHostEntry($HostName)
+            return $entry.HostName
+        } catch {
+            Write-Warning "DNS resolution failed for $HostName: $_"
+            return $HostName
+        }
+    }
+}
+
+# Gather OS and hardware details
+function Get-ServerOSInfo {
+    param([string]$ComputerName)
+    try {
+        $os = Get-CimOrWmiInstance -ClassName Win32_OperatingSystem -ComputerName $ComputerName
+        $cs = Get-CimOrWmiInstance -ClassName Win32_ComputerSystem -ComputerName $ComputerName
+        $disks = Get-CimOrWmiInstance -ClassName Win32_LogicalDisk -ComputerName $ComputerName -Filter "DriveType=3"
+
+        return [PSCustomObject]@{
+            OperatingSystem   = $os.Caption
+            OSVersion         = $os.Version
+            OSArchitecture    = $os.OSArchitecture
+            TotalMemoryGB     = [math]::Round($os.TotalVisibleMemorySize/1MB,2)
+            ProcessorCount    = $cs.NumberOfProcessors
+            LogicalProcessors = $cs.NumberOfLogicalProcessors
+            Disks = $disks | ForEach-Object {
+                [PSCustomObject]@{
+                    DriveLetter = $_.DeviceID
+                    FileSystem  = $_.FileSystem
+                    SizeGB      = [math]::Round($_.Size/1GB,2)
+                    FreeSpaceGB = [math]::Round($_.FreeSpace/1GB,2)
+                }
+            }
+        }
+    } catch {
+        Write-Warning "OS/hardware error on $ComputerName: $_"
+        return $null
+    }
+}
+
+# Retrieve SQL Server core information and service accounts
+function Get-SqlCoreInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT
+ SERVERPROPERTY('MachineName') AS SQLServerName,
+ ISNULL(SERVERPROPERTY('InstanceName'),'MSSQLSERVER') AS SQLInstanceName,
+ SERVERPROPERTY('Edition') AS SQLEdition,
+ SERVERPROPERTY('ProductVersion') AS SQLVersion,
+ SERVERPROPERTY('ProductLevel') AS SQLProductLevel,
+ SERVERPROPERTY('ProductUpdateLevel') AS SQLProductUpdateLevel,
+ SERVERPROPERTY('Collation') AS SQLCollation,
+ CASE SERVERPROPERTY('IsIntegratedSecurityOnly') WHEN 1 THEN 'Windows' ELSE 'Mixed' END AS SQLAuthMode,
+ (SELECT value_in_use FROM sys.configurations WHERE name='max server memory (MB)') AS SQLMaxMemoryMB,
+ (SELECT value_in_use FROM sys.configurations WHERE name='min server memory (MB)') AS SQLMinMemoryMB,
+ (SELECT service_account FROM sys.dm_server_services WHERE servicename = 'SQL Server') AS SQLServiceAccount,
+ (SELECT service_account FROM sys.dm_server_services WHERE servicename = 'SQL Server Agent') AS SQLAgentServiceAccount;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "SQL core property error on $Server: $_"
+        return $null
+    }
+}
+
+# Database inventory
+function Get-DatabaseInfo {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT d.name, d.recovery_model_desc, d.compatibility_level, d.state_desc, d.create_date,
+       CONVERT(decimal(10,2), SUM(mf.size) / 128.0) AS SizeMB
+FROM sys.databases d
+JOIN sys.master_files mf ON d.database_id = mf.database_id
+GROUP BY d.name, d.recovery_model_desc, d.compatibility_level, d.state_desc, d.create_date;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Database inventory error on $Server: $_"
+        return $null
+    }
+}
+
+# Agent jobs
+function Get-AgentJobs {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT j.name AS JobName, j.enabled, js.next_run_date, js.next_run_time
+FROM msdb.dbo.sysjobs j
+LEFT JOIN msdb.dbo.sysjobschedules js ON j.job_id = js.job_id;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query -Database 'msdb'
+    } catch {
+        Write-Warning "SQL Agent job query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Server logins
+function Get-Logins {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT name, type_desc, create_date, is_disabled
+FROM sys.server_principals
+WHERE type_desc IN ('SQL_LOGIN', 'WINDOWS_LOGIN', 'WINDOWS_GROUP');
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Logins query failed on $Server: $_"
+        return $null
+    }
+}
+
+# Linked servers
+function Get-LinkedServers {
+    param([string]$Server)
+    try {
+        $query = @"
+SELECT name, product, provider, data_source, catalog
+FROM sys.servers
+WHERE is_linked = 1;
+"@
+        return Invoke-SqlQuery -Server $Server -Query $query
+    } catch {
+        Write-Warning "Linked servers query failed on $Server: $_"
+        return $null
+    }
+}
+
 $AllServerData = @()
 
-$logPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-Start-Transcript -Path $logPath -Force
+Start-SafeTranscript
 
 foreach ($sv in $TargetServers) {
     Write-Host "`n===== Processing $sv =====" -ForegroundColor Cyan
@@ -81,7 +229,7 @@ foreach ($sv in $TargetServers) {
         ScannedServerInput     = $sv
         CollectionTimestamp    = (Get-Date).ToString('s')
         Status                 = 'Pending'
-        FQDN                   = ''
+        FQDN                   = Resolve-FQDN $hostOnly
         OperatingSystem        = ''
         OSVersion              = ''
         OSArchitecture         = ''
@@ -113,6 +261,16 @@ foreach ($sv in $TargetServers) {
     }
 
     try {
+        $osInfo = Get-ServerOSInfo -ComputerName $hostOnly
+        if ($osInfo) {
+            $obj.OperatingSystem   = $osInfo.OperatingSystem
+            $obj.OSVersion         = $osInfo.OSVersion
+            $obj.OSArchitecture    = $osInfo.OSArchitecture
+            $obj.TotalMemoryGB     = $osInfo.TotalMemoryGB
+            $obj.ProcessorCount    = $osInfo.ProcessorCount
+            $obj.LogicalProcessors = $osInfo.LogicalProcessors
+            $obj.Disks             = $osInfo.Disks
+=======
         try {
             $fqdna = Resolve-DnsName -Name $hostOnly -ErrorAction SilentlyContinue
             if (-not $fqdna) {
@@ -151,21 +309,8 @@ foreach ($sv in $TargetServers) {
             Write-Warning "OS/hardware error on $($sv): $($_)"
         }
 
-        try {
-            $coreQuery = @"
-SELECT
-  SERVERPROPERTY('MachineName') AS SQLServerName,
-  ISNULL(SERVERPROPERTY('InstanceName'),'MSSQLSERVER') AS SQLInstanceName,
-  SERVERPROPERTY('Edition') AS SQLEdition,
-  SERVERPROPERTY('ProductVersion') AS SQLVersion,
-  SERVERPROPERTY('ProductLevel') AS SQLProductLevel,
-  SERVERPROPERTY('ProductUpdateLevel') AS SQLProductUpdateLevel,
-  SERVERPROPERTY('Collation') AS SQLCollation,
-  CASE SERVERPROPERTY('IsIntegratedSecurityOnly') WHEN 1 THEN 'Windows' ELSE 'Mixed' END AS SQLAuthMode,
-  (SELECT value_in_use FROM sys.configurations WHERE name='max server memory (MB)') AS SQLMaxMemoryMB,
-  (SELECT value_in_use FROM sys.configurations WHERE name='min server memory (MB)') AS SQLMinMemoryMB;
-"@
-            $core = Invoke-SqlQuery -Server $sv -Query $coreQuery
+        $core = Get-SqlCoreInfo -Server $sv
+        if ($core) {
             $obj.SQLServerName         = $core.SQLServerName
             $obj.SQLInstanceName       = $core.SQLInstanceName
             $obj.SQLEdition            = $core.SQLEdition
@@ -176,33 +321,12 @@ SELECT
             $obj.SQLAuthMode           = $core.SQLAuthMode
             $obj.SQLMaxMemoryMB        = $core.SQLMaxMemoryMB
             $obj.SQLMinMemoryMB        = $core.SQLMinMemoryMB
-
-            $svcQuery = @"
-SELECT servicename, startup_type_desc, status_desc, service_account
-FROM sys.dm_server_services;
-"@
-            $svc = Invoke-SqlQuery -Server $sv -Query $svcQuery
-            foreach ($r in $svc) {
-                if ($r.servicename -like '*SQL Server*') {
-                    $obj.SQLServiceAccount = $r.service_account
-                }
-                elseif ($r.servicename -like '*SQL Server Agent*') {
-                    $obj.SQLAgentServiceAccount = $r.service_account
-                }
-            }
-        } catch {
-            Write-Warning "SQL core property error on $($sv): $($_)"
+            $obj.SQLServiceAccount     = $core.SQLServiceAccount
+            $obj.SQLAgentServiceAccount = $core.SQLAgentServiceAccount
         }
 
-        try {
-            $dbQuery = @"
-SELECT d.name, d.recovery_model_desc, d.compatibility_level, d.state_desc, d.create_date,
-       CONVERT(decimal(10,2), SUM(mf.size) / 128.0) AS SizeMB
-FROM sys.databases d
-JOIN sys.master_files mf ON d.database_id = mf.database_id
-GROUP BY d.name, d.recovery_model_desc, d.compatibility_level, d.state_desc, d.create_date;
-"@
-            $dbs = Invoke-SqlQuery -Server $sv -Query $dbQuery
+        $dbs = Get-DatabaseInfo -Server $sv
+        if ($dbs) {
             foreach ($db in $dbs) {
                 $obj.Databases += [PSCustomObject]@{
                     Name            = $db.name
@@ -213,42 +337,16 @@ GROUP BY d.name, d.recovery_model_desc, d.compatibility_level, d.state_desc, d.c
                     SizeMB          = $db.SizeMB
                 }
             }
-        } catch {
-            Write-Warning "Database inventory error on $($sv): $($_)"
         }
 
-        try {
-            $jobQuery = @"
-SELECT j.name AS JobName, j.enabled, js.next_run_date, js.next_run_time
-FROM msdb.dbo.sysjobs j
-LEFT JOIN msdb.dbo.sysjobschedules js ON j.job_id = js.job_id;
-"@
-            $obj.AgentJobs = Invoke-SqlQuery -Server $sv -Query $jobQuery -Database 'msdb' | Select-Object *
-        } catch {
-            Write-Warning "SQL Agent job query failed on $($sv): $($_)"
-        }
+        $jobs = Get-AgentJobs -Server $sv
+        if ($jobs) { $obj.AgentJobs = $jobs | Select-Object * }
 
-        try {
-            $loginQuery = @"
-SELECT name, type_desc, create_date, is_disabled
-FROM sys.server_principals
-WHERE type_desc IN ('SQL_LOGIN', 'WINDOWS_LOGIN', 'WINDOWS_GROUP');
-"@
-            $obj.Logins = Invoke-SqlQuery -Server $sv -Query $loginQuery | Select-Object *
-        } catch {
-            Write-Warning "Logins query failed on $($sv): $($_)"
-        }
+        $logins = Get-Logins -Server $sv
+        if ($logins) { $obj.Logins = $logins | Select-Object * }
 
-        try {
-            $linkedQuery = @"
-SELECT name, product, provider, data_source, catalog
-FROM sys.servers
-WHERE is_linked = 1;
-"@
-            $obj.LinkedServers = Invoke-SqlQuery -Server $sv -Query $linkedQuery | Select-Object *
-        } catch {
-            Write-Warning "Linked servers query failed on $($sv): $($_)"
-        }
+        $links = Get-LinkedServers -Server $sv
+        if ($links) { $obj.LinkedServers = $links | Select-Object * }
 
         $obj.Status = 'Success'
     } catch {
@@ -263,43 +361,16 @@ WHERE is_linked = 1;
 Stop-Transcript
 if ($OutputFormat -eq 'Json') {
     try {
-        Add-Type -AssemblyName 'System.Web.Extensions' -ErrorAction SilentlyContinue
-        if (-not ("Newtonsoft.Json.JsonConvert" -as [type])) {
-            $jsonDll = Get-ChildItem "$env:USERPROFILE\Documents\PowerShell\Modules" -Recurse -Filter "Newtonsoft.Json.dll" | Select-Object -First 1
-            if ($jsonDll) {
-                Add-Type -Path $jsonDll.FullName
-            } else {
-                Write-Warning "Newtonsoft.Json.dll not found. Falling back to ConvertTo-Json."
-                $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
-                $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
-                $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
-                Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
-                return
-            }
-        }
-
-        if ("Newtonsoft.Json.JsonConvert" -as [type]) {
-            $settings = New-Object Newtonsoft.Json.JsonSerializerSettings
-            $settings.ReferenceLoopHandling = "Ignore"
-            $settings.MaxDepth = 256
-            $settings.Formatting = [Newtonsoft.Json.Formatting]::Indented
-
-            $jsonOutput = [Newtonsoft.Json.JsonConvert]::SerializeObject($AllServerData, $settings)
-            $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
-            $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
-            Write-Host "✅ JSON export completed using Newtonsoft at $jsonPath"
-        } else {
-            $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
-            $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
-            $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
-            Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
-        }
-    } catch {
-        Write-Warning "Newtonsoft JSON serialization failed: $_"
-        $jsonOutput = $AllServerData | ConvertTo-Json -Depth 20
         $jsonPath = Join-Path $PSScriptRoot "SQLInventory_$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+        if ("Newtonsoft.Json.JsonConvert" -as [type]) {
+            $jsonOutput = [Newtonsoft.Json.JsonConvert]::SerializeObject($AllServerData, [Newtonsoft.Json.Formatting]::Indented)
+        } else {
+            $jsonOutput = $AllServerData | ConvertTo-Json -Depth 10
+        }
         $jsonOutput | Out-File -FilePath $jsonPath -Encoding UTF8
-        Write-Host "✅ JSON export completed using ConvertTo-Json at $jsonPath"
+        Write-Host "✅ JSON export completed at $jsonPath"
+    } catch {
+        Write-Warning "JSON export failed: $_"
     }
 }
 elseif ($OutputFormat -eq 'Csv') {
